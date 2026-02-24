@@ -120,7 +120,7 @@ def run_inference(model, text: str, image: Image.Image):
     probs      = torch.softmax(out.final_logits, dim=-1)[0].tolist()
     pred_idx   = int(torch.argmax(out.final_logits, dim=-1).item())
     gds        = float(out.gds_output.gds[0].item())
-    tau        = float(out.routing_output.tau.item())
+    tau        = float(model.routing_controller.threshold.item())
     is_conflict = bool(out.routing_output.routing_decisions[0].item())
     report     = out.conflict_reports[0] if out.conflict_reports else None
 
@@ -252,7 +252,7 @@ def main():
 
         model_path = st.text_input(
             "Checkpoint path",
-            value="checkpoints/cgrn_final.pt",
+            value="checkpoints_mvsa/cgrn_mvsa_final.pt",
             help="Path to a trained .pt checkpoint file",
         )
         text_model = st.selectbox(

@@ -170,6 +170,7 @@ class ConflictReport:
 def _generate_interpretation(
     text_label: int,
     image_label: int,
+    final_label: int,
     gds: float,
     is_conflict: bool,
     routing_threshold: float,
@@ -180,42 +181,55 @@ def _generate_interpretation(
     """
     t_name = SENTIMENT_LABELS[text_label]
     i_name = SENTIMENT_LABELS[image_label]
+    f_name = SENTIMENT_LABELS[final_label]
     agree  = (text_label == image_label)
 
     if agree and not is_conflict:
         return (
-            f"Both modalities agree ({t_name}). "
-            f"Low geometric dissonance (GDS={gds:.3f} < τ={routing_threshold:.3f}). "
-            f"High-confidence {t_name.lower()} prediction."
+            f"Text and image both signal {t_name.lower()} sentiment. "
+            f"GDS={gds:.3f} < τ={routing_threshold:.3f} — low dissonance, "
+            f"routed through normal fusion. Final: {f_name}."
         )
 
     if agree and is_conflict:
-        return (
-            f"Modalities predict same label ({t_name}) but geometric routes "
-            f"diverge (GDS={gds:.3f} ≥ τ={routing_threshold:.3f}). "
-            f"Possible subtle modality incongruence despite label agreement."
-        )
-
-    if not agree:
         sarcasm_note = ""
         if sarcasm_prob is not None and sarcasm_prob > 0.5:
             sarcasm_note = (
-                f" Sarcasm detector activated (p={sarcasm_prob:.2f}) "
-                f"→ Possible ironic or masked sentiment."
+                f" Sarcasm detector fired (p={sarcasm_prob:.2f}) — "
+                f"text may be ironic despite surface {t_name.lower()} signal."
             )
-        polarity_t = SENTIMENT_POLARITY[text_label]
-        polarity_i = SENTIMENT_POLARITY[image_label]
-        direction = "opposing" if polarity_t * polarity_i < 0 else "divergent"
-
+        changed = f_name != t_name
+        override_note = (
+            f" Cross-modal attention overrode unimodal agreement → Final: {f_name}."
+            if changed else
+            f" Final prediction confirms: {f_name}."
+        )
         return (
-            f"High cross-modal disagreement: Text={t_name}, Image={i_name}. "
-            f"GDS={gds:.3f} ≥ τ={routing_threshold:.3f} "
-            f"({direction} sentiment signals)."
-            + sarcasm_note
-            + " Conflict branch applied cross-attention refinement."
+            f"Text encoder: {t_name} | Image encoder: {i_name}. "
+            f"GDS={gds:.3f} ≥ τ={routing_threshold:.3f} — geometric dissonance "
+            f"detected despite matching unimodal labels; routed to conflict branch."
+            + sarcasm_note + override_note
         )
 
-    return f"GDS={gds:.3f}. Standard inference applied."
+    # Unimodal labels disagree
+    sarcasm_note = ""
+    if sarcasm_prob is not None and sarcasm_prob > 0.5:
+        sarcasm_note = (
+            f" Sarcasm detector fired (p={sarcasm_prob:.2f}) — "
+            f"possible ironic or masked sentiment."
+        )
+    polarity_t = SENTIMENT_POLARITY[text_label]
+    polarity_i = SENTIMENT_POLARITY[image_label]
+    direction = "opposing" if polarity_t * polarity_i < 0 else "divergent"
+
+    return (
+        f"Cross-modal conflict: Text={t_name}, Image={i_name} ({direction} signals). "
+        f"GDS={gds:.3f} ≥ τ={routing_threshold:.3f} — routed to conflict branch. "
+        f"Cross-attention resolved final prediction: {f_name}."
+        + sarcasm_note
+    )
+
+
 
 
 # =============================================================================
@@ -313,6 +327,7 @@ class ExplainabilityModule:
             interp = _generate_interpretation(
                 text_label=t_idx,
                 image_label=i_idx,
+                final_label=f_idx,
                 gds=gds_val,
                 is_conflict=bool(is_conf),
                 routing_threshold=tau,
