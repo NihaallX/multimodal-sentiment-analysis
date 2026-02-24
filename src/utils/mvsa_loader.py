@@ -124,41 +124,56 @@ def parse_mvsa_multiple_annotations(label_file: str) -> Dict[str, dict]:
     """
     Parse MVSA-Multiple annotation file.
 
-    Expected format per line (CSV, no header):
-        id, text1, img1, text2, img2, text3, img3
-    where labels are: positive / negative / neutral  (or 1/2/3)
+    Actual format (tab-separated, first row is header):
+        ID\ttext,image\ttext,image\ttext,image
+    e.g.:
+        2499\tpositive,positive\tneutral,neutral\tpositive,positive
 
     Returns dict: {sample_id → {text_label, image_label, conflict, valid}}
     """
     samples = {}
     with open(label_file, "r", encoding="utf-8", errors="replace") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            row = [c.strip() for c in row]
-            if not row or row[0].lower() in ("id", ""):
-                continue  # skip header / blank
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            parts = [p.strip() for p in parts]
+            # Skip header row
+            if parts[0].lower() in ("id", ""):
+                continue
             try:
-                sid = row[0]
-                text_labels  = [_parse_label(row[i]) for i in [1, 3, 5] if i < len(row)]
-                image_labels = [_parse_label(row[i]) for i in [2, 4, 6] if i < len(row)]
+                sid = parts[0]
+                text_labels, image_labels = [], []
+                valid = True
+                for cell in parts[1:]:          # each cell is "text,image"
+                    if "," not in cell:
+                        valid = False
+                        break
+                    t_raw, i_raw = cell.split(",", 1)
+                    t_raw, i_raw = t_raw.strip().lower(), i_raw.strip().lower()
+                    if t_raw in ("invalid", "") or i_raw in ("invalid", ""):
+                        valid = False
+                        break
+                    text_labels.append(_parse_label(t_raw))
+                    image_labels.append(_parse_label(i_raw))
+
+                if not valid or not text_labels:
+                    continue
 
                 text_maj  = _majority(text_labels)
                 image_maj = _majority(image_labels)
                 conflict  = int(text_maj != image_maj)
-
-                # Skip samples where any annotator marked invalid ("invalid")
-                invalid_flags = [str(r).strip().lower() for r in row[1:]]
-                valid = not any(f in ("invalid", "-1", "") for f in invalid_flags)
 
                 samples[sid] = {
                     "text_label":  text_maj,
                     "image_label": image_maj,
                     "final_label": text_maj,   # use text majority as ground truth (common practice)
                     "conflict":    conflict,
-                    "valid":       valid,
+                    "valid":       True,
                 }
             except (IndexError, ValueError) as e:
-                logger.debug(f"Skipping malformed row: {row} ({e})")
+                logger.debug(f"Skipping malformed row: {parts} ({e})")
     return samples
 
 
@@ -249,7 +264,8 @@ class MVSADataset(Dataset):
                     else parse_mvsa_single_annotations)
         all_annotations = parse_fn(label_file)
 
-        # Filter to valid samples that have both image and text on disk
+        # Filter to valid samples that have both image and text on disk.
+        # MVSA files are flat inside data/: data/2499.jpg, data/2499.txt
         data_dir = os.path.join(data_root, "data")
         self.samples = []
         skipped = 0
@@ -257,13 +273,13 @@ class MVSADataset(Dataset):
             if not ann["valid"]:
                 skipped += 1
                 continue
-            sample_dir = os.path.join(data_dir, sid)
-            img_path   = os.path.join(sample_dir, f"{sid}.jpg")
-            txt_path   = os.path.join(sample_dir, f"{sid}.txt")
-            # Some datasets use .jpeg or .png
+            # Flat layout: data_dir/<sid>.jpg  (no subdirectory)
+            img_path = os.path.join(data_dir, f"{sid}.jpg")
+            txt_path = os.path.join(data_dir, f"{sid}.txt")
+            # Try alternate image extensions
             if not os.path.exists(img_path):
                 for ext in [".jpeg", ".png", ".gif"]:
-                    alt = os.path.join(sample_dir, f"{sid}{ext}")
+                    alt = os.path.join(data_dir, f"{sid}{ext}")
                     if os.path.exists(alt):
                         img_path = alt
                         break
@@ -318,7 +334,7 @@ class MVSADataset(Dataset):
             "attention_mask": enc["attention_mask"].squeeze(0),
             "images":         image,
             "labels":         torch.tensor(s["label"],    dtype=torch.long),
-            "conflict_flags": torch.tensor(s["conflict"], dtype=torch.float),
+            "conflict":       torch.tensor(s["conflict"], dtype=torch.long),
             "sample_id":      s["id"],
         }
 
@@ -387,10 +403,11 @@ def build_mvsa_dataloaders(
     )
 
     n_conflict = sum(1 for s in full_ds.samples if s["conflict"])
+    conflict_pct = (100 * n_conflict / n) if n > 0 else 0.0
     logger.info(
         f"MVSA-{variant.capitalize()} split: "
         f"Train={len(train_dataset)} | Val={len(val_dataset)} | Test={len(test_dataset)} | "
-        f"Conflict samples={n_conflict} ({100*n_conflict/n:.1f}%)"
+        f"Conflict samples={n_conflict} ({conflict_pct:.1f}%)"
     )
     logger.info(f"Label distribution: { {IDX_TO_NAME[k]: v for k, v in sorted(label_counts.items())} }")
     logger.info(f"Class weights: {class_weights.tolist()}")

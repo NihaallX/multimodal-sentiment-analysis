@@ -31,7 +31,7 @@ import torch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.models.cgrn_model import CGRNModel, CGRNConfig
+from src.models.cgrn_model import CGRNModel
 from src.models.unimodal_classifiers import UnimodalTextClassifier, UnimodalImageClassifier
 from src.training.training_strategy import (
     TrainingConfig, UnimodalTrainer, CGRNTrainer,
@@ -149,12 +149,6 @@ def main():
 
     # ── Build model ───────────────────────────────────────────────────────────
     logger.info("Building CGRN model...")
-    cfg = CGRNConfig(
-        text_model_name=args.text_model,
-        image_backbone=args.image_backbone,
-        embed_dim=args.embed_dim,
-        num_classes=3,
-    )
     model = CGRNModel(
         text_model_name=args.text_model,
         image_backbone=args.image_backbone,
