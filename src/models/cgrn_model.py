@@ -299,7 +299,7 @@ class CGRNConfig:
     """Serializable configuration for CGRN."""
 
     DEFAULT = dict(
-        text_model_name         = "distilbert-base-uncased",
+        text_model_name         = "roberta-base",
         image_backbone          = "mobilenet_v3_small",
         embed_dim               = 256,
         num_classes             = 3,

@@ -54,10 +54,10 @@ Image Input ──► [MobileNetV3]   ──► S_i ∈ ℝ²⁵⁶  ──┘  
 | Model | Backbone | Acc | Macro-F1 | Conflict F1 | τ learned |
 |---|---|---|---|---|---|
 | CGRN v1 | DistilBERT + MobileNetV3-S | 63.4% | 0.552 | 0.471 | ✅ (0.587) |
-| CGRN v2 *(in training)* | RoBERTa-base + MobileNetV3-S | — | ~0.62–0.65 est. | — | ✅ |
+| CGRN v2 | RoBERTa-base + MobileNetV3-S | 62.9% | 0.558 | 0.477 | ✅ (0.566) |
 
-**Routing correctness:** 100% of conflict samples routed to conflict branch.  
-**GDS separation:** Conflict mean=0.778, Non-conflict mean=0.757 (gap widening with training).
+**Routing correctness (v2):** 97.0% of conflict samples routed to conflict branch; 94.8% of non-conflict samples routed to normal branch.  
+**GDS separation:** Conflict mean=0.771, Non-conflict mean=0.741 (τ=0.566 cleanly separates distributions).
 
 ---
 
@@ -229,7 +229,7 @@ $$L_\tau = \text{ReLU}(\tau + m - D_{conflict}) + \text{ReLU}(D_{normal} + m - \
 ## Hardware
 
 Trained on **NVIDIA GeForce RTX 3050 6GB Laptop GPU** (CUDA 12.8, PyTorch 2.10+cu128).  
-Training time: ~60 min (DistilBERT) / ~2.5 hrs (RoBERTa-base) for 5+8+5 epochs on MVSA-Multiple.
+Training time: ~60 min (DistilBERT) / ~6.5 hrs (RoBERTa-base) for 5+8+5 epochs on MVSA-Multiple (RTX 3050 6 GB).
 
 ---
 

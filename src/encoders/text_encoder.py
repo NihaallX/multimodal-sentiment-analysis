@@ -40,6 +40,7 @@ class TextEncoder(nn.Module):
 
     SUPPORTED_MODELS = {
         "distilbert-base-uncased": 768,
+        "roberta-base": 768,
         "sentence-transformers/all-MiniLM-L6-v2": 384,
         "sentence-transformers/paraphrase-MiniLM-L3-v2": 384,
     }

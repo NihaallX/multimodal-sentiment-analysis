@@ -40,7 +40,7 @@ from sklearn.metrics import (
     accuracy_score,
     f1_score,
 )
-from transformers import DistilBertTokenizer
+from transformers import AutoTokenizer
 
 from src.models.cgrn_model import CGRNConfig
 from src.utils.mvsa_loader import build_mvsa_dataloaders
@@ -89,7 +89,8 @@ def run_evaluation(args):
     print(f"  Device     : {device}")
 
     # ── Build dataloaders ────────────────────────────────────────────────────
-    tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
+    text_model_name = CGRNConfig.DEFAULT.get("text_model_name", "roberta-base")
+    tokenizer = AutoTokenizer.from_pretrained(text_model_name)
     loaders = build_mvsa_dataloaders(
         data_root=args.data_root,
         tokenizer=tokenizer,
@@ -110,7 +111,7 @@ def run_evaluation(args):
     model.eval()
 
     tau_val = model.routing_controller.threshold.item()
-    print(f"  Learned τ  : {tau_val:.4f}")
+    print(f"  Learned tau: {tau_val:.4f}")
 
     # ── Inference ────────────────────────────────────────────────────────────
     all_preds, all_labels, all_conflict = [], [], []

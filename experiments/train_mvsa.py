@@ -53,7 +53,7 @@ def parse_args():
 
     # Model
     p.add_argument("--embed_dim",      type=int, default=256)
-    p.add_argument("--text_model",     type=str, default="distilbert-base-uncased")
+    p.add_argument("--text_model",     type=str, default="roberta-base")
     p.add_argument("--image_backbone", type=str, default="mobilenet_v3_small")
 
     # Training stages
@@ -66,10 +66,12 @@ def parse_args():
     p.add_argument("--max_length",     type=int, default=128)
 
     # LR
-    p.add_argument("--lr_text",   type=float, default=2e-5)
+    p.add_argument("--lr_text",   type=float, default=1e-5,
+                   help="Text encoder LR (1e-5 recommended for roberta-base)")
     p.add_argument("--lr_image",  type=float, default=1e-4)
-    p.add_argument("--lr_stage2", type=float, default=1e-4)
-    p.add_argument("--lr_stage3", type=float, default=5e-6)
+    p.add_argument("--lr_stage2", type=float, default=5e-5)
+    p.add_argument("--lr_stage3", type=float, default=2e-6,
+                   help="End-to-end LR (lower for roberta-base)")
 
     # Output
     p.add_argument("--output_dir", type=str, default="checkpoints_mvsa")
