@@ -64,6 +64,12 @@ class TrainingConfig:
     stage2_batch_size:  int   = 32
     aux_loss_weight:    float = 0.1    # weight for routing auxiliary loss
 
+    # Loss tuning — v3 routing fix
+    tau_margin:               float = 0.35  # hinge margin (was 0.2 — too small)
+    tau_weight:               float = 0.5   # weight of tau hinge loss (was 0.2)
+    routing_balance_weight:   float = 0.15  # penalise routing >max_conflict_ratio to one branch
+    max_conflict_routing_ratio: float = 0.6 # soft upper bound on predicted conflict rate
+
     # Stage 3
     stage3_epochs:      int   = 5
     stage3_lr:          float = 5e-6
@@ -113,8 +119,10 @@ class CGRNLoss(nn.Module):
         self,
         unimodal_weight: float = 0.3,
         routing_weight:  float = 0.1,
-        tau_weight:      float = 0.2,
-        tau_margin:      float = 0.2,
+        tau_weight:      float = 0.5,   # v3: raised from 0.2
+        tau_margin:      float = 0.35,  # v3: raised from 0.2
+        routing_balance_weight:     float = 0.15,
+        max_conflict_routing_ratio: float = 0.6,
         label_smoothing: float = 0.1,
     ):
         super().__init__()
@@ -122,6 +130,8 @@ class CGRNLoss(nn.Module):
         self.routing_weight  = routing_weight
         self.tau_weight      = tau_weight
         self.tau_margin      = tau_margin
+        self.routing_balance_weight     = routing_balance_weight
+        self.max_conflict_routing_ratio = max_conflict_routing_ratio
         self.ce = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
     def forward(
@@ -171,6 +181,14 @@ class CGRNLoss(nn.Module):
             + self.tau_weight      * L_tau
         )
 
+        # Routing balance loss: penalise routing >max_conflict_ratio of batch to conflict
+        L_balance = torch.tensor(0.0, device=final_logits.device)
+        if tau is not None and self.routing_balance_weight > 0:
+            # Soft routing rate: sigmoid((gds - tau) * temp)
+            soft_routing_rate = torch.sigmoid((gds_scores.detach() - tau) * 10.0).mean()
+            L_balance = torch.relu(soft_routing_rate - self.max_conflict_routing_ratio)
+            total = total + self.routing_balance_weight * L_balance
+
         return {
             "total":     total,
             "main":      L_main,
@@ -178,6 +196,7 @@ class CGRNLoss(nn.Module):
             "image_uni": L_image,
             "routing":   L_routing,
             "tau":       L_tau,
+            "balance":   L_balance,
         }
 
 
@@ -401,6 +420,10 @@ class CGRNTrainer:
         self.loss_fn = CGRNLoss(
             unimodal_weight=0.3,
             routing_weight=config.aux_loss_weight,
+            tau_weight=config.tau_weight,
+            tau_margin=config.tau_margin,
+            routing_balance_weight=config.routing_balance_weight,
+            max_conflict_routing_ratio=config.max_conflict_routing_ratio,
         )
         self.gds_logger_cls = None
         try:

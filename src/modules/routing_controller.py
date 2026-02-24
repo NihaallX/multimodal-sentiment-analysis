@@ -326,7 +326,7 @@ class RoutingController(nn.Module):
         self,
         embed_dim: int = 256,
         num_classes: int = 3,
-        threshold_init: float = 0.5,
+        threshold_init: float = 0.65,   # v3: raised from 0.5 for better separation
         learn_threshold: bool = True,
         use_sarcasm_head: bool = True,
         normal_hidden: int = 256,

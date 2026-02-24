@@ -73,6 +73,16 @@ def parse_args():
     p.add_argument("--lr_stage3", type=float, default=2e-6,
                    help="End-to-end LR (lower for roberta-base)")
 
+    # Routing / tau loss  (v3 fixes)
+    p.add_argument("--tau_margin",  type=float, default=0.35,
+                   help="Hinge margin for tau separation (v3: 0.35 vs v2: 0.2)")
+    p.add_argument("--tau_weight",  type=float, default=0.5,
+                   help="Weight of tau hinge loss (v3: 0.5 vs v2: 0.2)")
+    p.add_argument("--routing_balance_weight", type=float, default=0.15,
+                   help="Penalty weight for routing >max_conflict_ratio to conflict branch")
+    p.add_argument("--threshold_init", type=float, default=0.65,
+                   help="Initial tau threshold (v3: 0.65 vs v2: 0.5)")
+
     # Output
     p.add_argument("--output_dir", type=str, default="checkpoints_mvsa")
     p.add_argument("--device",     type=str, default="auto")
@@ -156,6 +166,7 @@ def main():
         image_backbone=args.image_backbone,
         embed_dim=args.embed_dim,
         num_classes=3,
+        routing_threshold=args.threshold_init,
     ).to(device)
 
     n_total  = sum(p.numel() for p in model.parameters())
@@ -176,6 +187,9 @@ def main():
         device=str(device),
         seed=args.seed,
         num_workers=args.num_workers,
+        tau_margin=args.tau_margin,
+        tau_weight=args.tau_weight,
+        routing_balance_weight=args.routing_balance_weight,
     )
     train_config.device = str(device)
 
