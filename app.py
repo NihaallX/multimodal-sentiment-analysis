@@ -88,26 +88,29 @@ SENTIMENT_EMOJIS = ["😊", "😞", "😐"]
 @st.cache_resource(show_spinner="Loading CGRN model...")
 def load_model(model_path: str, text_model: str, embed_dim: int):
     from src.models.cgrn_model import CGRNModel
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = CGRNModel(
         text_model_name=text_model,
         embed_dim=embed_dim,
         num_classes=3,
     )
     if model_path and os.path.exists(model_path):
-        state = torch.load(model_path, map_location="cpu")
+        state = torch.load(model_path, map_location=device)
         model.load_state_dict(state)
         st.sidebar.success(f"✓ Loaded: {Path(model_path).name}")
     else:
         st.sidebar.warning("⚠ No checkpoint loaded — using random weights (demo only)")
+    model.to(device)
     model.eval()
     return model
 
 
 def run_inference(model, text: str, image: Image.Image):
     """Run CGRN inference and return structured result dict."""
+    device = next(model.parameters()).device
     # Tokenise
-    enc = model.text_encoder.tokenize([text], device="cpu")
-    img_tensor = IMAGE_TRANSFORMS(image.convert("RGB")).unsqueeze(0)
+    enc = model.text_encoder.tokenize([text], device=str(device))
+    img_tensor = IMAGE_TRANSFORMS(image.convert("RGB")).unsqueeze(0).to(device)
 
     with torch.no_grad():
         out = model(
@@ -203,10 +206,10 @@ def render_conflict_report(report):
     st.markdown(f"""
 <div class="report-box">
 <b>Sample ID:</b> {getattr(report, 'sample_id', 'N/A')}<br>
-<b>Prediction:</b> {getattr(report, 'predicted_sentiment', 'N/A')}<br>
+<b>Prediction:</b> {getattr(report, 'final_prediction_label', 'N/A')}<br>
 <b>GDS Score:</b> {getattr(report, 'gds_score', 'N/A')}<br>
 <b>Conflict:</b> {getattr(report, 'is_conflict', 'N/A')}<br>
-<b>Branch:</b> {getattr(report, 'routing_branch', 'N/A')}<br>
+<b>Branch:</b> {getattr(report, 'routing_path', 'N/A')}<br>
 <b>Confidence:</b> {getattr(report, 'confidence', 'N/A')}<br>
 <b>Interpretation:</b><br>{getattr(report, 'interpretation', 'N/A')}
 </div>
@@ -257,12 +260,10 @@ def main():
         )
         text_model = st.selectbox(
             "Text backbone",
-            ["distilbert-base-uncased", "bert-base-uncased"],
+            ["roberta-base", "distilbert-base-uncased", "bert-base-uncased"],
             index=0,
         )
         embed_dim = st.select_slider("Embedding dim", options=[128, 256, 512], value=256)
-        device_label = "cuda" if torch.cuda.is_available() else "cpu"
-        st.caption(f"🖥 Device: **{device_label}**")
 
         st.divider()
         st.markdown("## 📖 About")
@@ -279,6 +280,8 @@ Novelties:
 
     # ── Load model ──────────────────────────────────────────────────────────
     model = load_model(model_path, text_model, embed_dim)
+    actual_device = str(next(model.parameters()).device)
+    st.sidebar.caption(f"🖥 Device: **{actual_device}**")
 
     # ── Header ────────────────────────────────────────────────────────────────
     st.markdown('<p class="main-header">🧠 CGRN Multimodal Sentiment Analysis</p>',
@@ -328,13 +331,13 @@ Novelties:
 
             if uploaded:
                 image = Image.open(uploaded).convert("RGB")
-                st.image(image, caption="Uploaded image", use_column_width=True)
+                st.image(image, caption="Uploaded image", use_container_width=True)
                 use_placeholder = False
             elif use_placeholder:
                 # Generate simple coloured placeholder
                 arr = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
                 image = Image.fromarray(arr)
-                st.image(image, caption="Random placeholder image", use_column_width=True)
+                st.image(image, caption="Random placeholder image", use_container_width=True)
             else:
                 image = None
 
@@ -479,7 +482,7 @@ Novelties:
         col_diag, col_params = st.columns([3, 2])
         with col_diag:
             st.code("""
-Text Input → [DistilBERT + Proj] → S_t ∈ ℝ²⁵⁶ ─────────────┐
+Text Input → [RoBERTa + Proj]   → S_t ∈ ℝ²⁵⁶ ─────────────┐
                                                                │
 Image Input → [MobileNetV3 + Proj] → S_i ∈ ℝ²⁵⁶ ────────────┤
                                                                ↓
@@ -520,7 +523,7 @@ Image Input → [MobileNetV3 + Proj] → S_i ∈ ℝ²⁵⁶ ──────�
             n_router = sum(p.numel() for p in model.routing_controller.parameters())
 
             st.metric("Total params",     f"{n_total/1e6:.1f}M")
-            st.metric("Text Encoder",     f"{n_text/1e6:.1f}M  (DistilBERT)")
+            st.metric("Text Encoder",     f"{n_text/1e6:.1f}M  ({text_model.split('-')[0].capitalize()})")
             st.metric("Image Encoder",    f"{n_image/1e6:.1f}M  (MobileNetV3)")
             st.metric("GDS Module",       f"{n_gds}")
             st.metric("Routing + Fusion", f"{n_router/1e3:.0f}K")
@@ -539,15 +542,17 @@ Image Input → [MobileNetV3 + Proj] → S_i ∈ ℝ²⁵⁶ ──────�
 
         # Benchmark table
         st.divider()
-        st.markdown("#### 📈 Benchmark Results (Synthetic Data)")
+        st.markdown("#### 📈 Benchmark Results — MVSA-Multiple (2,940 test samples)")
         benchmark = {
-            "Model":         ["Text Only", "Image Only", "Static Fusion", "**CGRN (ours)**"],
-            "Accuracy":      ["95.6%", "20.0%", "51.1%", "**100.0%**"],
-            "Macro F1":      ["0.944", "0.164", "0.226", "**1.000**"],
-            "Conflict F1":   ["1.000", "0.000", "1.000", "**1.000**"],
+            "Model":           ["DistilBERT v1", "**RoBERTa v2 (ours)**"],
+            "Backbone":        ["DistilBERT + MobileNetV3", "**RoBERTa-base + MobileNetV3**"],
+            "Accuracy":        ["63.4%", "**62.9%**"],
+            "Macro F1":        ["0.552", "**0.558**"],
+            "Conflict F1":     ["0.471", "**0.477**"],
+            "τ learned":       ["0.587", "**0.566**"],
         }
         st.table(benchmark)
-        st.caption("Note: 100% accuracy is on synthetic data; real-world MVSA benchmarks pending.")
+        st.caption("Conflict routing: 97.0% of conflict samples correctly routed to conflict branch. Non-conflict Acc=67.2%.")
 
 
 if __name__ == "__main__":

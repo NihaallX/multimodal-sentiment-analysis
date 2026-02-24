@@ -51,8 +51,8 @@ from .routing_controller import RoutingOutput
 # Label mappings
 # =============================================================================
 
-SENTIMENT_LABELS = {0: "Negative", 1: "Neutral", 2: "Positive"}
-SENTIMENT_POLARITY = {0: -1.0, 1: 0.0, 2: 1.0}
+SENTIMENT_LABELS  = {0: "Positive", 1: "Negative", 2: "Neutral"}
+SENTIMENT_POLARITY = {0: 1.0, 1: -1.0, 2: 0.0}
 
 
 # =============================================================================

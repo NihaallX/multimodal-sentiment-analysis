@@ -46,7 +46,7 @@ from src.models.cgrn_model import CGRNConfig
 from src.utils.mvsa_loader import build_mvsa_dataloaders
 
 # ─────────────────────────────────────────────────────────────────────────────
-LABEL_NAMES = ["negative", "neutral", "positive"]
+LABEL_NAMES = ["positive", "negative", "neutral"]
 
 
 def parse_args():
