@@ -340,14 +340,17 @@ class RoutingController(nn.Module):
 
         # --- Routing threshold ------------------------------------------------
         if learn_threshold:
-            # Store as logit so threshold stays in [0, ∞) when passed through sigmoid
-            # and can be up-scaled. We use direct parameter and clamp during inference.
+            # Learnable τ parameter, clamped to [0.01, 2.0] to stay meaningful
             self.log_threshold = nn.Parameter(torch.tensor(threshold_init))
             self.learn_threshold = True
         else:
             self.register_buffer("_fixed_threshold",
                                   torch.tensor(threshold_init))
             self.learn_threshold = False
+
+        # Temperature for soft routing (higher = sharper routing boundary)
+        # Anneals from soft → hard during training naturally as τ learns
+        self.register_buffer("temperature", torch.tensor(10.0))
 
         # --- Specialized branches ---------------------------------------------
         self.normal_branch = NormalFusionBranch(
@@ -369,7 +372,7 @@ class RoutingController(nn.Module):
     @property
     def threshold(self) -> torch.Tensor:
         if self.learn_threshold:
-            return self.log_threshold.clamp(min=0.0)
+            return self.log_threshold.clamp(min=0.01, max=2.0)
         return self._fixed_threshold
 
     # -------------------------------------------------------------------------
@@ -390,43 +393,40 @@ class RoutingController(nn.Module):
         -------
         RoutingOutput  — logits, routing decisions, and branch-specific outputs
         """
-        tau = self.threshold
-        routing_decisions = (gds >= tau)   # [B] bool  — True = conflict
+        tau = self.threshold   # scalar tensor
 
-        B = s_t.shape[0]
-        logits               = torch.zeros(B, self.num_classes, device=s_t.device)
-        conflict_logits_out  = None
-        normal_logits_out    = None
-        sarcasm_logits_out   = None
+        # Hard routing decisions (used for stats and inference)
+        routing_decisions = (gds >= tau).detach()   # [B] bool — True = conflict
 
-        # --- Normal Fusion Branch  (GDS < τ) ---------------------------------
-        normal_mask = ~routing_decisions                          # [B]
-        if normal_mask.any():
-            n_logits = self.normal_branch(
-                s_t[normal_mask], s_i[normal_mask]
-            )                                                     # [B_n, C]
-            logits[normal_mask] = n_logits
-            normal_logits_out   = n_logits
+        # --- Always compute both branches so gradients flow to τ --------------
+        # Soft routing weight via sigmoid: p_conflict ∈ (0,1), differentiable in τ
+        p_conflict = torch.sigmoid((gds - tau) * self.temperature)  # [B]
+        p_normal   = 1.0 - p_conflict                                # [B]
 
-        # --- Conflict Branch  (GDS ≥ τ) ---------------------------------------
-        conflict_mask = routing_decisions                         # [B]
-        if conflict_mask.any():
-            c_logits, sarc_logits = self.conflict_branch(
-                s_t[conflict_mask],
-                s_i[conflict_mask],
-                gds[conflict_mask],
-            )                                                     # [B_c, C]
-            logits[conflict_mask]  = c_logits
-            conflict_logits_out    = c_logits
-            sarcasm_logits_out     = sarc_logits
+        # Normal Fusion: all samples
+        normal_logits  = self.normal_branch(s_t, s_i)               # [B, C]
+        # Conflict Branch: all samples
+        conflict_logits, sarcasm_logits_out = self.conflict_branch(s_t, s_i, gds)  # [B, C]
+
+        if self.training:
+            # Soft blend — τ gets gradients through p_conflict
+            logits = (p_normal.unsqueeze(-1) * normal_logits +
+                      p_conflict.unsqueeze(-1) * conflict_logits)    # [B, C]
+        else:
+            # Hard routing at inference — no ambiguity
+            logits = torch.where(
+                routing_decisions.unsqueeze(-1).expand_as(normal_logits),
+                conflict_logits,
+                normal_logits,
+            )
 
         return RoutingOutput(
             logits=logits,
             routing_decisions=routing_decisions,
             gds_scores=gds,
             threshold=tau.item(),
-            normal_branch_logits=normal_logits_out,
-            conflict_branch_logits=conflict_logits_out,
+            normal_branch_logits=normal_logits,
+            conflict_branch_logits=conflict_logits,
             sarcasm_logits=sarcasm_logits_out,
         )
 

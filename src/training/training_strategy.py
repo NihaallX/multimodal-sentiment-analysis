@@ -93,24 +93,31 @@ class CGRNLoss(nn.Module):
     """
     Combined training loss for CGRN.
 
-    L_total = L_main + λ_uni * (L_text + L_image) + λ_aux * L_routing
+    L_total = L_main + λ_uni * (L_text + L_image) + λ_routing * L_routing + λ_tau * L_tau
 
     where:
       L_main    = CrossEntropy(final_logits, labels)
       L_text    = CrossEntropy(text_logits, labels)   [unimodal supervision]
       L_image   = CrossEntropy(image_logits, labels)  [unimodal supervision]
       L_routing = -GDS mean for known-conflict samples  [encourages high GDS for conflicts]
+      L_tau     = hinge loss that separates τ between conflict/non-conflict GDS values
+                  For conflict:     max(0, τ + margin - gds)  → push gds > τ
+                  For non-conflict: max(0, gds + margin - τ)  → push gds < τ
     """
 
     def __init__(
         self,
         unimodal_weight: float = 0.3,
         routing_weight:  float = 0.1,
+        tau_weight:      float = 0.2,
+        tau_margin:      float = 0.2,
         label_smoothing: float = 0.1,
     ):
         super().__init__()
         self.unimodal_weight = unimodal_weight
         self.routing_weight  = routing_weight
+        self.tau_weight      = tau_weight
+        self.tau_margin      = tau_margin
         self.ce = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
     def forward(
@@ -121,6 +128,7 @@ class CGRNLoss(nn.Module):
         labels:        torch.Tensor,    # [B]
         gds_scores:    torch.Tensor,    # [B]
         conflict_mask: Optional[torch.Tensor] = None,  # [B] bool
+        tau:           Optional[torch.Tensor] = None,  # scalar learnable threshold
     ) -> Dict[str, torch.Tensor]:
         """
         Returns dict with individual loss components and total.
@@ -130,15 +138,33 @@ class CGRNLoss(nn.Module):
         L_image = self.ce(image_logits,  labels)
 
         L_routing = torch.tensor(0.0, device=final_logits.device)
+        L_tau     = torch.tensor(0.0, device=final_logits.device)
+
         if conflict_mask is not None and conflict_mask.any():
-            # For known-conflict samples, maximize GDS (push it above threshold)
-            # Loss = -mean(GDS) for conflict samples → encourages high GDS
+            # Routing loss: push GDS high for conflict samples
             L_routing = -gds_scores[conflict_mask].mean()
+
+            # τ hinge loss: separate threshold from both GDS distributions
+            if tau is not None:
+                # Conflict samples should have gds > tau + margin
+                conflict_hinge = torch.relu(
+                    tau + self.tau_margin - gds_scores[conflict_mask]
+                ).mean()
+                L_tau = conflict_hinge
+
+                non_conflict_mask = ~conflict_mask
+                if non_conflict_mask.any():
+                    # Non-conflict samples should have gds < tau - margin
+                    non_conflict_hinge = torch.relu(
+                        gds_scores[non_conflict_mask] + self.tau_margin - tau
+                    ).mean()
+                    L_tau = L_tau + non_conflict_hinge
 
         total = (
             L_main
             + self.unimodal_weight * (L_text + L_image)
             + self.routing_weight  * L_routing
+            + self.tau_weight      * L_tau
         )
 
         return {
@@ -147,6 +173,7 @@ class CGRNLoss(nn.Module):
             "text_uni":  L_text,
             "image_uni": L_image,
             "routing":   L_routing,
+            "tau":       L_tau,
         }
 
 
@@ -472,6 +499,7 @@ class CGRNTrainer:
                     labels=labels,
                     gds_scores=output.gds_output.gds,
                     conflict_mask=conflict_mask,
+                    tau=self.model.routing_controller.threshold,
                 )
 
                 losses["total"].backward()
@@ -490,7 +518,10 @@ class CGRNTrainer:
             avg_loss       = epoch_loss / max(len(train_loader), 1)
             val_metrics    = self._evaluate_cgrn(val_loader)
             gds_summary    = gds_stats.summary() if gds_stats else {}
-            tau            = self.model.routing_controller.threshold.item()
+            tau_val        = self.model.routing_controller.threshold.item()
+
+            # Track per-epoch tau loss (last batch value as proxy)
+            tau_loss_val = losses.get("tau", torch.tensor(0.0)).item()
 
             logger.info(
                 f"[{stage}] Epoch {epoch}/{n_epochs} | "
@@ -499,7 +530,8 @@ class CGRNTrainer:
                 f"Val F1={val_metrics.get('macro_f1', 0):.4f} | "
                 f"GDS_mean={gds_summary.get('gds_mean', 0):.4f} | "
                 f"ConflictRatio={gds_summary.get('conflict_ratio', 0):.3f} | "
-                f"τ={tau:.4f}"
+                f"τ={tau_val:.4f} | "
+                f"τ_loss={tau_loss_val:.4f}"
             )
 
             history["train_loss"].append(avg_loss)
@@ -507,7 +539,7 @@ class CGRNTrainer:
             history["val_f1"].append(val_metrics.get("macro_f1", 0))
             history["gds_mean"].append(gds_summary.get("gds_mean", 0))
             history["conflict_ratio"].append(gds_summary.get("conflict_ratio", 0))
-            history["threshold"].append(tau)
+            history["threshold"].append(tau_val)
 
             if val_metrics.get("macro_f1", 0) > best_f1:
                 best_f1 = val_metrics["macro_f1"]
