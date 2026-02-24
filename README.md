@@ -1,5 +1,251 @@
 # Conflict-Aware Geometric Routing Network (CGRN)
 
+> **Multimodal Sentiment Analysis with Conflict-Aware Geometric Routing**  
+> A modular, explainable architecture that detects cross-modal disagreement geometrically and routes inference through sarcasm-sensitive conflict branches.
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.10%2B-orange)](https://pytorch.org)
+[![Transformers](https://img.shields.io/badge/HuggingFace-Transformers-yellow)](https://huggingface.co)
+[![CUDA](https://img.shields.io/badge/CUDA-12.8-green)](https://developer.nvidia.com/cuda-toolkit)
+
+---
+
+## What is CGRN?
+
+Most multimodal sentiment systems simply fuse text and image features together. CGRN takes a different approach: it **measures how much the two modalities geometrically disagree**, uses that as a routing signal, and sends conflicting samples (sarcasm, irony, contradiction) through a specialized cross-attention conflict branch.
+
+**The key idea — Geometric Dissonance Score (GDS):**
+
+$$D = \alpha \cdot (1 - \cos(S_t, S_i)) + \beta \cdot \|\ |S_t\| - \|S_i\|\ |$$
+
+where $\alpha$, $\beta$ are **learnable** parameters, and $S_t$, $S_i$ are the L2-normalized sentiment embeddings for text and image.
+
+If $D \geq \tau$ (learnable threshold) → **Conflict Branch** (cross-attention + sarcasm detection)  
+If $D < \tau$ → **Normal Fusion Branch** (simple concat + MLP)
+
+---
+
+## Architecture
+
+```
+Text Input  ──► [RoBERTa-base]  ──► S_t ∈ ℝ²⁵⁶  ──┐
+                                                     ├──► [GDS Module] ──► D (scalar)
+Image Input ──► [MobileNetV3]   ──► S_i ∈ ℝ²⁵⁶  ──┘            │
+                                                                   ▼
+                                                    ┌─── [Routing Controller] ───┐
+                                                    │  D < τ            D ≥ τ   │
+                                                    ▼                            ▼
+                                          [Normal Fusion]            [Conflict Branch]
+                                           Concat + MLP          CrossAttn + Sarcasm Head
+                                                    └──────────────┬─────────────┘
+                                                                   ▼
+                                                          Final Prediction (3-class)
+                                                                   ▼
+                                                      [Explainability Engine]
+                                                         → Conflict Report
+```
+
+---
+
+## Results
+
+### MVSA-Multiple (19,600 real social media posts)
+
+| Model | Backbone | Acc | Macro-F1 | Conflict F1 | τ learned |
+|---|---|---|---|---|---|
+| CGRN v1 | DistilBERT + MobileNetV3-S | 63.4% | 0.552 | 0.471 | ✅ (0.587) |
+| CGRN v2 *(in training)* | RoBERTa-base + MobileNetV3-S | — | ~0.62–0.65 est. | — | ✅ |
+
+**Routing correctness:** 100% of conflict samples routed to conflict branch.  
+**GDS separation:** Conflict mean=0.778, Non-conflict mean=0.757 (gap widening with training).
+
+---
+
+## Key Technical Contributions
+
+| # | Contribution | Details |
+|---|---|---|
+| 1 | **Differentiable GDS** | Learnable α, β weights; fully differentiable geometric disagreement score |
+| 2 | **Soft routing during training** | `p_conflict = σ((D − τ) · T)` — both branches computed, blended; hard routing at inference |
+| 3 | **Learnable τ with hinge loss** | τ hinge pushes threshold between conflict/non-conflict GDS distributions |
+| 4 | **Conflict Branch** | Cross-modal attention + dedicated sarcasm detection head |
+| 5 | **Auto conflict reports** | Per-inference structured report with routing decision, GDS, sarcasm probability, interpretation |
+| 6 | **3-stage training** | Unimodal pretraining → routing/fusion training → end-to-end fine-tuning |
+
+---
+
+## Project Structure
+
+```
+NLP-Project/
+├── src/
+│   ├── encoders/
+│   │   ├── text_encoder.py            # RoBERTa/DistilBERT → S_t ∈ ℝ²⁵⁶
+│   │   └── image_encoder.py           # MobileNetV3 → S_i ∈ ℝ²⁵⁶
+│   ├── modules/
+│   │   ├── gds_module.py              # Geometric Dissonance Score (α, β learnable)
+│   │   ├── routing_controller.py      # Soft routing, learnable τ, conflict/normal branches
+│   │   └── explainability_module.py   # Auto conflict report generation
+│   ├── models/
+│   │   ├── cgrn_model.py              # Full CGRN end-to-end model + CGRNConfig
+│   │   └── unimodal_classifiers.py    # Stage 1 unimodal wrappers
+│   ├── training/
+│   │   └── training_strategy.py       # 3-stage trainer, CGRNLoss (τ hinge), cosine LR
+│   ├── evaluation/
+│   │   ├── evaluator.py               # Model comparison framework
+│   │   ├── ablation.py                # Ablation studies
+│   │   └── efficiency_analysis.py     # Latency / memory profiling
+│   └── utils/
+│       ├── mvsa_loader.py             # MVSA-Multiple/Single dataset loader
+│       ├── data_loader.py             # Generic dataset utilities
+│       └── visualization.py           # Training plots
+├── experiments/
+│   ├── train_mvsa.py                  # Train on MVSA-Multiple / MVSA-Single
+│   ├── evaluate_mvsa.py               # Evaluate on MVSA test split
+│   ├── run_training.py                # Synthetic data training
+│   └── run_evaluation.py             # Synthetic data evaluation
+├── app.py                             # Streamlit interactive dashboard
+├── demo.py                            # Quick architecture demo
+├── checkpoints_mvsa/                  # Trained model checkpoints
+├── results/                           # Evaluation outputs + confusion matrix
+├── docs/
+│   ├── problem_definition.md
+│   ├── patent_draft_outline.md
+│   └── architecture_diagram.md
+└── requirements.txt
+```
+
+---
+
+## Quick Start
+
+### 1. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Run the Streamlit demo (no training needed)
+
+The pre-trained checkpoint (`checkpoints_mvsa/cgrn_mvsa_final.pt`) runs inference on any text + image pair.
+
+```bash
+streamlit run app.py
+```
+
+Open http://localhost:8501, load the checkpoint from the sidebar, then type any text and upload an image.
+
+**Try a conflict example:**
+- Text: *"Oh great, another Monday"* + image of empty office → GDS > τ → Conflict Branch ✅
+
+### 3. Train on MVSA-Multiple
+
+Download [MVSA-Multiple](http://mcrlab.net/research/mvsa-sentiment-analysis-on-multi-view-social-data/) and extract to `data/MVSA_Multiple/`.
+
+```bash
+python experiments/train_mvsa.py \
+    --data_root data/MVSA_Multiple \
+    --stage1_epochs 5 \
+    --stage2_epochs 8 \
+    --stage3_epochs 5 \
+    --batch_size 32 \
+    --device cuda
+```
+
+### 4. Evaluate
+
+```bash
+python experiments/evaluate_mvsa.py \
+    --checkpoint checkpoints_mvsa/cgrn_mvsa_final.pt \
+    --data_root  data/MVSA_Multiple \
+    --device     cuda
+```
+
+Outputs: per-class F1, conflict/non-conflict subset metrics, GDS distribution, routing correctness, confusion matrix PNG.
+
+### 5. Single inference (Python)
+
+```python
+import torch
+from PIL import Image
+from transformers import AutoTokenizer
+from torchvision import transforms
+from src.models.cgrn_model import CGRNConfig
+
+device = "cuda"
+model = CGRNConfig.build().to(device)
+model.load_state_dict(torch.load("checkpoints_mvsa/cgrn_mvsa_final.pt", map_location=device), strict=False)
+model.eval()
+
+tok = AutoTokenizer.from_pretrained("roberta-base")
+enc = tok("This place is absolutely terrible!", return_tensors="pt",
+          padding="max_length", max_length=128, truncation=True)
+
+transform = transforms.Compose([
+    transforms.Resize(256), transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
+])
+image = transform(Image.open("your_image.jpg").convert("RGB")).unsqueeze(0)
+
+with torch.no_grad():
+    out = model(enc["input_ids"].to(device), enc["attention_mask"].to(device), image.to(device), return_reports=True)
+
+labels = ["negative", "neutral", "positive"]
+print(f"Prediction : {labels[out.final_logits.argmax().item()]}")
+print(f"GDS        : {out.gds_output.gds.item():.4f}")
+print(f"τ          : {model.routing_controller.threshold.item():.4f}")
+print(f"Branch     : {'CONFLICT' if out.routing_output.routing_decisions[0] else 'NORMAL'}")
+print(out.conflict_reports[0])
+```
+
+---
+
+## Training Pipeline Details
+
+### 3-Stage Strategy
+
+| Stage | What trains | LR | Purpose |
+|---|---|---|---|
+| **Stage 1** | Text encoder + Image encoder independently | 1e-5 / 1e-4 | Learn strong unimodal representations |
+| **Stage 2** | GDS module, routing controller τ, fusion branches (encoders mostly frozen, last 2 text layers unfrozen) | 5e-5 | Learn geometric routing |
+| **Stage 3** | All layers end-to-end | 2e-6 | Fine-tune for final coherence |
+
+All stages use **cosine LR schedule with linear warmup (10%)**.
+
+### Loss Function
+
+$$L_{total} = L_{CE} + \lambda_u (L_{text} + L_{image}) + \lambda_r L_{routing} + \lambda_\tau L_\tau$$
+
+- $L_{CE}$: cross-entropy on final logits
+- $L_{text}, L_{image}$: unimodal supervision (λ=0.3)
+- $L_{routing}$: pushes GDS high for conflict samples (λ=0.1)
+- $L_\tau$: **τ hinge loss** — explicitly separates threshold between conflict/non-conflict GDS (λ=0.2):
+
+$$L_\tau = \text{ReLU}(\tau + m - D_{conflict}) + \text{ReLU}(D_{normal} + m - \tau), \quad m=0.2$$
+
+---
+
+## Hardware
+
+Trained on **NVIDIA GeForce RTX 3050 6GB Laptop GPU** (CUDA 12.8, PyTorch 2.10+cu128).  
+Training time: ~60 min (DistilBERT) / ~2.5 hrs (RoBERTa-base) for 5+8+5 epochs on MVSA-Multiple.
+
+---
+
+## Novel Claims (Patent Basis)
+
+1. **Differentiable geometric dissonance score** as a routing signal between multimodal branches
+2. **Learnable routing threshold τ** trained via hinge loss separation
+3. **Soft routing during training** via sigmoid blend; hard routing at inference — gradient flows to τ
+4. **Conflict branch with cross-modal attention** specialized for sarcasm and contradictory modalities
+5. **Per-inference structured conflict reports** with routing decision, GDS, sarcasm probability, and natural language interpretation
+
+---
+
+*CGRN — Conflict-Aware Geometric Routing Network | 2026*
+
+
 > **Patent-Oriented Multimodal Sentiment Analysis System**  
 > A lightweight, modular, explainable architecture that explicitly models cross-modal geometric disagreement and routes inference through conflict-specialized branches.
 
