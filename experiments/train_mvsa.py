@@ -246,8 +246,20 @@ def main():
 
     # ── Final save ────────────────────────────────────────────────────────────
     final_path = os.path.join(args.output_dir, "cgrn_mvsa_final.pt")
-    torch.save(model.state_dict(), final_path)
-    logger.info(f"\n✓ Final model saved → {final_path}")
+    try:
+        # Move model to CPU before saving to avoid CUDA context issues
+        model.cpu()
+        torch.save(model.state_dict(), final_path)
+        logger.info(f"\n✓ Final model saved → {final_path}")
+    except Exception as e:
+        logger.warning(f"torch.save failed ({e}); falling back to copying best stage3 checkpoint.")
+        import shutil
+        stage3_path = os.path.join(args.output_dir, "best_cgrn_stage3.pt")
+        if os.path.exists(stage3_path):
+            shutil.copy2(stage3_path, final_path)
+            logger.info(f"✓ Copied best_cgrn_stage3.pt → {final_path}")
+        else:
+            logger.error("best_cgrn_stage3.pt not found; final model not saved.")
     logger.info("MVSA training pipeline complete.")
 
 

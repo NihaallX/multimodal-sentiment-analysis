@@ -544,15 +544,16 @@ Image Input → [MobileNetV3 + Proj] → S_i ∈ ℝ²⁵⁶ ──────�
         st.divider()
         st.markdown("#### 📈 Benchmark Results — MVSA-Multiple (2,940 test samples)")
         benchmark = {
-            "Model":           ["DistilBERT v1", "**RoBERTa v2 (ours)**"],
-            "Backbone":        ["DistilBERT + MobileNetV3", "**RoBERTa-base + MobileNetV3**"],
-            "Accuracy":        ["63.4%", "**62.9%**"],
-            "Macro F1":        ["0.552", "**0.558**"],
-            "Conflict F1":     ["0.471", "**0.477**"],
-            "τ learned":       ["0.587", "**0.566**"],
+            "Model":           ["DistilBERT v1", "RoBERTa v2", "**RoBERTa v3 (ours)**"],
+            "Backbone":        ["DistilBERT + MobileNetV3", "RoBERTa-base + MobileNetV3", "**RoBERTa-base + MobileNetV3**"],
+            "Accuracy":        ["63.4%", "62.9%", "**61.8%**"],
+            "Macro F1":        ["0.552", "0.558", "**0.552**"],
+            "Conflict F1":     ["0.471", "0.477", "**0.483**"],
+            "τ learned":       ["0.587", "0.566", "**0.735**"],
+            "Harmonic→Normal": ["n/a", "5.2%", "**29.9%**"],
         }
         st.table(benchmark)
-        st.caption("Conflict routing: 97.0% of conflict samples correctly routed to conflict branch. Non-conflict Acc=67.2%.")
+        st.caption("v3 routing fix: τ_margin 0.35 + balance loss forces GDS separation. Conflict→Conflict: 78.1%, Harmonic→Normal: 29.9% (v2: 5.2%). Non-conflict Acc=65.2%.")
 
 
 if __name__ == "__main__":

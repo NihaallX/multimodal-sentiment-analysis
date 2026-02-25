@@ -19,6 +19,7 @@ env/
 
 # PyTorch checkpoints (large binary files)
 checkpoints/*.pt
+checkpoints_mvsa/*.pt
 
 # HuggingFace cache
 .cache/

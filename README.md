@@ -55,9 +55,11 @@ Image Input ──► [MobileNetV3]   ──► S_i ∈ ℝ²⁵⁶  ──┘  
 |---|---|---|---|---|---|
 | CGRN v1 | DistilBERT + MobileNetV3-S | 63.4% | 0.552 | 0.471 | ✅ (0.587) |
 | CGRN v2 | RoBERTa-base + MobileNetV3-S | 62.9% | 0.558 | 0.477 | ✅ (0.566) |
+| **CGRN v3** | **RoBERTa-base + MobileNetV3-S** | **61.8%** | **0.552** | **0.483** | ✅ **(0.735)** |
 
-**Routing correctness (v2):** 97.0% of conflict samples routed to conflict branch; 94.8% of non-conflict samples routed to normal branch.  
-**GDS separation:** Conflict mean=0.771, Non-conflict mean=0.741 (τ=0.566 cleanly separates distributions).
+**Routing correctness (v3):** 78.1% of conflict samples routed to conflict branch; 29.9% of harmonic samples routed to normal branch (up from 5.2% in v2).  
+**v3 fixes:** τ_margin 0.2→0.35, τ_weight 0.2→0.5, routing balance loss (weight=0.15), threshold_init 0.5→0.65.  
+**GDS separation (v3):** GDS mean=0.886, τ=0.735 — meaningful threshold vs v2's collapsed τ=0.566.
 
 ---
 
