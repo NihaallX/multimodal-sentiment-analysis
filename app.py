@@ -32,6 +32,8 @@ from torchvision import transforms
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
+from src.modules.clip_scorer import CLIPScorer, preprocess_text, detect_sarcasm
+
 # ─── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
     page_title="CGRN — Multimodal Sentiment Analysis",
@@ -85,6 +87,11 @@ SENTIMENT_COLORS = ["sentiment-positive", "sentiment-negative", "sentiment-neutr
 SENTIMENT_EMOJIS = ["😊", "😞", "😐"]
 
 
+@st.cache_resource(show_spinner="Loading CLIP scorer...")
+def load_clip_scorer(device: str) -> CLIPScorer:
+    return CLIPScorer(device=device)
+
+
 @st.cache_resource(show_spinner="Loading CGRN model...")
 def load_model(model_path: str, text_model: str, embed_dim: int):
     from src.models.cgrn_model import CGRNModel
@@ -105,12 +112,18 @@ def load_model(model_path: str, text_model: str, embed_dim: int):
     return model
 
 
-def run_inference(model, text: str, image: Image.Image):
+def run_inference(model, text: str, image: Image.Image, tau_override: float | None = None):
     """Run CGRN inference and return structured result dict."""
     device = next(model.parameters()).device
-    # Tokenise
-    enc = model.text_encoder.tokenize([text], device=str(device))
+    # Tokenise (use emoji-preprocessed text so RoBERTa sees sentiment tokens)
+    enc = model.text_encoder.tokenize([preprocess_text(text)], device=str(device))
     img_tensor = IMAGE_TRANSFORMS(image.convert("RGB")).unsqueeze(0).to(device)
+
+    # Fix D: optionally override learned τ for this inference
+    _orig_tau = None
+    if tau_override is not None:
+        _orig_tau = model.routing_controller.threshold.data.clone()
+        model.routing_controller.threshold.data.fill_(tau_override)
 
     with torch.no_grad():
         out = model(
@@ -120,14 +133,18 @@ def run_inference(model, text: str, image: Image.Image):
             return_reports=True,
         )
 
-    probs      = torch.softmax(out.final_logits, dim=-1)[0].tolist()
-    pred_idx   = int(torch.argmax(out.final_logits, dim=-1).item())
-    gds        = float(out.gds_output.gds[0].item())
-    tau        = float(model.routing_controller.threshold.item())
-    is_conflict = bool(out.routing_output.routing_decisions[0].item())
-    report     = out.conflict_reports[0] if out.conflict_reports else None
+    # Restore original τ if we overrode it
+    if _orig_tau is not None:
+        model.routing_controller.threshold.data.copy_(_orig_tau)
 
-    text_probs  = torch.softmax(out.text_logits, dim=-1)[0].tolist()
+    probs       = torch.softmax(out.final_logits, dim=-1)[0].tolist()
+    pred_idx    = int(torch.argmax(out.final_logits, dim=-1).item())
+    gds         = float(out.gds_output.gds[0].item())
+    tau         = float(model.routing_controller.threshold.item())
+    is_conflict = bool(out.routing_output.routing_decisions[0].item())
+    report      = out.conflict_reports[0] if out.conflict_reports else None
+
+    text_probs  = torch.softmax(out.text_logits,  dim=-1)[0].tolist()
     image_probs = torch.softmax(out.image_logits, dim=-1)[0].tolist()
 
     return {
@@ -265,6 +282,31 @@ def main():
         )
         embed_dim = st.select_slider("Embedding dim", options=[128, 256, 512], value=256)
 
+        # ── Fix D: τ override slider ──────────────────────────────────────
+        st.divider()
+        st.markdown("## ⚙️ Routing Override")
+        use_tau_override = st.checkbox(
+            "Override learned τ",
+            value=False,
+            help="Enable to manually set the routing threshold instead of using the model's learned τ=0.735",
+        )
+        tau_override_val = st.slider(
+            "τ threshold",
+            min_value=0.10, max_value=1.50, value=0.50, step=0.05,
+            disabled=not use_tau_override,
+            help="Lower τ → more samples routed to conflict branch. Model learned τ=0.735.",
+        )
+        st.caption("Tip: set τ=0.3 to force almost everything through the conflict branch for testing.")
+
+        # ── CLIP augmentation toggle ──────────────────────────────────────
+        st.divider()
+        st.markdown("## 🖼 CLIP Augmentation")
+        use_clip = st.checkbox(
+            "Enable CLIP analysis",
+            value=True,
+            help="Run CLIP ViT-B/32 alongside CGRN for a semantic text-image alignment score and zero-shot image sentiment. First run downloads ~0.6GB.",
+        )
+
         st.divider()
         st.markdown("## 📖 About")
         st.markdown("""
@@ -282,6 +324,10 @@ Novelties:
     model = load_model(model_path, text_model, embed_dim)
     actual_device = str(next(model.parameters()).device)
     st.sidebar.caption(f"🖥 Device: **{actual_device}**")
+
+    # ── Load CLIP scorer (lazy — only downloads on first use) ────────────────
+    clip_device = "cuda" if torch.cuda.is_available() else "cpu"
+    clip_scorer = load_clip_scorer(clip_device) if use_clip else None
 
     # ── Header ────────────────────────────────────────────────────────────────
     st.markdown('<p class="main-header">🧠 CGRN Multimodal Sentiment Analysis</p>',
@@ -348,10 +394,31 @@ Novelties:
             st.markdown("### 📤 Results")
 
             if analyze and text_input.strip() and image is not None:
+                # Run sarcasm detector before inference (Fix C)
+                sarcasm_info = detect_sarcasm(text_input)
+
                 with st.spinner("Running CGRN inference…"):
                     t0 = time.perf_counter()
-                    result = run_inference(model, text_input, image)
+                    result = run_inference(
+                        model, text_input, image,
+                        tau_override=tau_override_val if use_tau_override else None,
+                    )
                     elapsed = (time.perf_counter() - t0) * 1000
+
+                # Run CLIP in parallel (shown after CGRN results)
+                clip_result = None
+                if clip_scorer is not None:
+                    with st.spinner("Running CLIP analysis…"):
+                        try:
+                            clip_alignment  = clip_scorer.score_alignment(text_input, image)
+                            clip_img_probs  = clip_scorer.score_image_sentiment(image)
+                            clip_result = {
+                                "alignment":  clip_alignment,
+                                "clip_gds":   1.0 - clip_alignment,  # semantic conflict score
+                                "img_probs":  clip_img_probs,
+                            }
+                        except Exception as e:
+                            st.warning(f"CLIP scorer error: {e}")
 
                 pred   = result["pred_idx"]
                 label  = SENTIMENT_LABELS[pred]
@@ -396,6 +463,61 @@ Novelties:
                     render_probabilities(result["text_probs"], "Text")
                 with tabs_prob[2]:
                     render_probabilities(result["image_probs"], "Image")
+
+                # ── Sarcasm indicator (Fix C) ─────────────────────────────
+                if sarcasm_info["likely_sarcasm"]:
+                    with st.expander("⚠️ Sarcasm Signals Detected", expanded=True):
+                        st.warning(
+                            f"**Sarcasm score: {sarcasm_info['score']}** — "
+                            "rule-based detector flagged this text. "
+                            "CGRN may underestimate negative sentiment for sarcastic posts."
+                        )
+                        for sig in sarcasm_info["signals"]:
+                            st.markdown(f"  - {sig}")
+                        st.caption(
+                            "Preprocessed text sent to RoBERTa: "
+                            f"`{preprocess_text(text_input)[:120]}…`"
+                        )
+
+                # ── CLIP augmented results ────────────────────────────────
+                if clip_result:
+                    with st.expander("🖼 CLIP Supplementary Analysis", expanded=True):
+                        cc1, cc2 = st.columns(2)
+                        with cc1:
+                            st.markdown("**Semantic Alignment (CLIP)**")
+                            alignment = clip_result["alignment"]
+                            clip_gds  = clip_result["clip_gds"]
+                            align_color = "🟢" if alignment > 0.25 else ("🟠" if alignment > 0.10 else "🔴")
+                            st.markdown(
+                                f"{align_color} CLIP similarity = **{alignment:.4f}**  "
+                                f"| CLIP-GDS = **{clip_gds:.4f}**"
+                            )
+                            st.caption(
+                                "CLIP similarity: text & image in the *same* semantic space. "
+                                "< 0.10 = strong conflict, 0.10–0.25 = mild, > 0.25 = agree."
+                            )
+                            # Conflict override hint
+                            if clip_gds > 0.80 and not result["is_conflict"]:
+                                st.error(
+                                    "💡 **CLIP suggests conflict** (CLIP-GDS > 0.80) but CGRN routed "
+                                    "to Normal branch. Try lowering τ in the sidebar to < "
+                                    f"{result['gds']:.2f} to force conflict routing."
+                                )
+
+                        with cc2:
+                            st.markdown("**CLIP Zero-Shot Image Sentiment**")
+                            ip = clip_result["img_probs"]
+                            st.markdown(f"😊 Positive: **{ip['positive']*100:.1f}%**")
+                            st.markdown(f"😞 Negative: **{ip['negative']*100:.1f}%**")
+                            st.markdown(f"😐 Neutral:  **{ip['neutral']*100:.1f}%**")
+                            clip_img_pred = max(ip, key=ip.get)
+                            cgrn_text_pred = ["positive", "negative", "neutral"][result["pred_idx"]]
+                            if clip_img_pred != cgrn_text_pred:
+                                st.warning(
+                                    f"CLIP image says **{clip_img_pred}** but "
+                                    f"RoBERTa text says **{cgrn_text_pred}** — "
+                                    "cross-modal disagreement detected."
+                                )
 
                 # ── Conflict report ───────────────────────────────────────
                 with st.expander("📋 Conflict Report (Patent Feature)", expanded=True):
