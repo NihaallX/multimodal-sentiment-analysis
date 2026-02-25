@@ -2,16 +2,14 @@
 clip_scorer.py — CLIP-based supplementary text-image semantic scorer
 =====================================================================
 
-Provides three things without requiring any retraining:
+Provides two things without requiring any retraining:
 
 1. CLIPScorer
    - score_image_sentiment(image)  → {positive, negative, neutral} probs via zero-shot
    - score_alignment(text, image)  → cosine similarity in CLIP's joint embedding space
                                       (High = text+image agree, Low = they conflict)
 
-2. preprocess_text(text)           → Fix A: replace sentiment/sarcasm emojis with tokens
-
-3. detect_sarcasm(text)            → Fix C: rule-based sarcasm signal detector
+2. detect_sarcasm(text)            → Fix C: rule-based sarcasm signal detector
                                       returns {score, signals, likely_sarcasm}
 
 Design notes
@@ -36,61 +34,6 @@ _IMAGE_SENTIMENT_PROMPTS = {
     "negative": "a photo that expresses sad, angry, stressed, frustrated, or negative sentiment",
     "neutral":  "a neutral photo without strong emotional content",
 }
-
-# ─── Emoji → text token map (Fix A) ─────────────────────────────────────────
-_EMOJI_MAP = {
-    # Sarcasm / irony markers
-    "🙃": " [sarcasm_face] ",
-    "😒": " [annoyed] ",
-    "🙄": " [eyeroll] ",
-    "😑": " [expressionless] ",
-    "😬": " [grimace] ",
-    "😏": " [smirk] ",
-    "🤷": " [shrug] ",
-    "🤦": " [facepalm] ",
-    # Strong negative
-    "😡": " [angry] ",
-    "🤬": " [furious] ",
-    "😤": " [frustrated] ",
-    "😭": " [crying_hard] ",
-    "💀": " [dead_from_shock] ",
-    "🤮": " [disgusted] ",
-    # Positive
-    "😂": " [laughing_hard] ",
-    "😍": " [love_struck] ",
-    "🥰": " [loving] ",
-    "🎉": " [celebrating] ",
-    "❤️": " [love] ",
-    "💔": " [heartbreak] ",
-    "👏": " [clapping] ",
-    "🔥": " [fire_hot] ",
-    # Neutral/ambiguous
-    "🤔": " [thinking] ",
-    "😐": " [neutral_face] ",
-}
-
-
-def preprocess_text(text: str) -> str:
-    """Fix A: Replace emoji with semantic text tokens before tokenization.
-
-    This lets RoBERTa 'see' sentiment signals that were previously mapped to
-    unknown/rare subwords. The replacement tokens are in-vocabulary words that
-    carry the intended sentiment meaning.
-
-    Parameters
-    ----------
-    text : str
-        Raw input text (may contain emoji).
-
-    Returns
-    -------
-    str
-        Cleaned text with emoji replaced by descriptive tokens.
-    """
-    for emoji, token in _EMOJI_MAP.items():
-        text = text.replace(emoji, token)
-    return text.strip()
-
 
 # ─── Sarcasm heuristics (Fix C) ─────────────────────────────────────────────
 

@@ -32,7 +32,7 @@ from torchvision import transforms
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from src.modules.clip_scorer import CLIPScorer, preprocess_text, detect_sarcasm
+from src.modules.clip_scorer import CLIPScorer, detect_sarcasm
 
 # ─── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
@@ -115,8 +115,8 @@ def load_model(model_path: str, text_model: str, embed_dim: int):
 def run_inference(model, text: str, image: Image.Image, tau_override: float | None = None):
     """Run CGRN inference and return structured result dict."""
     device = next(model.parameters()).device
-    # Tokenise (use emoji-preprocessed text so RoBERTa sees sentiment tokens)
-    enc = model.text_encoder.tokenize([preprocess_text(text)], device=str(device))
+    # Tokenise
+    enc = model.text_encoder.tokenize([text], device=str(device))
     img_tensor = IMAGE_TRANSFORMS(image.convert("RGB")).unsqueeze(0).to(device)
 
     # Fix D: optionally override learned τ for this inference
@@ -298,15 +298,6 @@ def main():
         )
         st.caption("Tip: set τ=0.3 to force almost everything through the conflict branch for testing.")
 
-        # ── CLIP augmentation toggle ──────────────────────────────────────
-        st.divider()
-        st.markdown("## 🖼 CLIP Augmentation")
-        use_clip = st.checkbox(
-            "Enable CLIP analysis",
-            value=True,
-            help="Run CLIP ViT-B/32 alongside CGRN for a semantic text-image alignment score and zero-shot image sentiment. First run downloads ~0.6GB.",
-        )
-
         st.divider()
         st.markdown("## 📖 About")
         st.markdown("""
@@ -325,9 +316,9 @@ Novelties:
     actual_device = str(next(model.parameters()).device)
     st.sidebar.caption(f"🖥 Device: **{actual_device}**")
 
-    # ── Load CLIP scorer (lazy — only downloads on first use) ────────────────
+    # ── Load CLIP scorer (always on, lazy-downloads on first use) ───────────
     clip_device = "cuda" if torch.cuda.is_available() else "cpu"
-    clip_scorer = load_clip_scorer(clip_device) if use_clip else None
+    clip_scorer = load_clip_scorer(clip_device)
 
     # ── Header ────────────────────────────────────────────────────────────────
     st.markdown('<p class="main-header">🧠 CGRN Multimodal Sentiment Analysis</p>',
@@ -474,10 +465,6 @@ Novelties:
                         )
                         for sig in sarcasm_info["signals"]:
                             st.markdown(f"  - {sig}")
-                        st.caption(
-                            "Preprocessed text sent to RoBERTa: "
-                            f"`{preprocess_text(text_input)[:120]}…`"
-                        )
 
                 # ── CLIP augmented results ────────────────────────────────
                 if clip_result:
