@@ -282,21 +282,15 @@ def main():
         )
         embed_dim = st.select_slider("Embedding dim", options=[128, 256, 512], value=256)
 
-        # ── Fix D: τ override slider ──────────────────────────────────────
+        # ── τ routing slider ─────────────────────────────────────────
         st.divider()
-        st.markdown("## ⚙️ Routing Override")
-        use_tau_override = st.checkbox(
-            "Override learned τ",
-            value=False,
-            help="Enable to manually set the routing threshold instead of using the model's learned τ=0.735",
-        )
+        st.markdown("## 🔀 Routing Threshold")
         tau_override_val = st.slider(
             "τ threshold",
-            min_value=0.10, max_value=1.50, value=0.50, step=0.05,
-            disabled=not use_tau_override,
-            help="Lower τ → more samples routed to conflict branch. Model learned τ=0.735.",
+            min_value=0.10, max_value=1.50, value=0.735, step=0.05,
+            help="Routing cutoff. GDS ≥ τ → Conflict branch. GDS < τ → Normal branch. Model learned τ=0.735.",
         )
-        st.caption("Tip: set τ=0.3 to force almost everything through the conflict branch for testing.")
+        st.caption("τ=0.735 = learned value. Lower → more conflict routing. Try 0.30 to force conflict branch.")
 
         st.divider()
         st.markdown("## 📖 About")
@@ -392,7 +386,7 @@ Novelties:
                     t0 = time.perf_counter()
                     result = run_inference(
                         model, text_input, image,
-                        tau_override=tau_override_val if use_tau_override else None,
+                        tau_override=tau_override_val,
                     )
                     elapsed = (time.perf_counter() - t0) * 1000
 
