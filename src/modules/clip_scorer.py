@@ -172,13 +172,12 @@ class CLIPScorer:
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        text_feat  = self._model.get_text_features(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-        )
-        image_feat = self._model.get_image_features(
-            pixel_values=inputs["pixel_values"],
-        )
+        # Use full CLIPModel forward pass — compatible with transformers 4.x and 5.x.
+        # get_text_features / get_image_features changed return type in transformers 5.x;
+        # CLIPOutput.text_embeds / image_embeds are always raw tensors.
+        outputs    = self._model(**inputs)
+        text_feat  = outputs.text_embeds   # [1, 512]
+        image_feat = outputs.image_embeds  # [1, 512]
         text_feat  = F.normalize(text_feat,  p=2, dim=-1)
         image_feat = F.normalize(image_feat, p=2, dim=-1)
 
