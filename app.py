@@ -416,6 +416,58 @@ Novelties:
                 m2.metric("Confidence", f"{max(result['probs'])*100:.1f}%")
                 m3.metric("Latency", f"{elapsed:.0f} ms")
 
+                # ── Sarcasm indicator (Fix C) — shown early, no scroll needed ──
+                if sarcasm_info["likely_sarcasm"]:
+                    with st.expander("⚠️ Sarcasm Signals Detected", expanded=True):
+                        st.warning(
+                            f"**Sarcasm score: {sarcasm_info['score']}** — "
+                            "rule-based detector flagged this text. "
+                            "CGRN may underestimate negative sentiment for sarcastic posts."
+                        )
+                        for sig in sarcasm_info["signals"]:
+                            st.markdown(f"  - {sig}")
+
+                # ── CLIP Supplementary Analysis — inline block ────────────
+                if clip_result:
+                    st.markdown("#### 🖼 CLIP Supplementary Analysis")
+                    cc1, cc2 = st.columns(2)
+                    with cc1:
+                        st.markdown("**Semantic Alignment (CLIP)**")
+                        alignment = clip_result["alignment"]
+                        clip_gds  = clip_result["clip_gds"]
+                        align_color = "🟢" if alignment > 0.20 else ("🟠" if alignment > 0.08 else "🔴")
+                        st.markdown(
+                            f"{align_color} CLIP similarity = **{alignment:.4f}**  "
+                            f"| CLIP-GDS = **{clip_gds:.4f}**"
+                        )
+                        st.caption(
+                            "CLIP similarity: text & image in the *same* semantic space. "
+                            "< 0.08 = strong conflict, 0.08–0.20 = mild, > 0.20 = agree."
+                        )
+                        if clip_gds > 0.80 and not result["is_conflict"]:
+                            st.error(
+                                "💡 **CLIP suggests conflict** (CLIP-GDS > 0.80) but CGRN routed "
+                                "to Normal branch. Try lowering τ in the sidebar to < "
+                                f"{result['gds']:.2f} to force conflict routing."
+                            )
+                    with cc2:
+                        st.markdown("**CLIP Zero-Shot Image Sentiment**")
+                        ip = clip_result["img_probs"]
+                        st.markdown(f"😊 Positive: **{ip['positive']*100:.1f}%**")
+                        st.markdown(f"😞 Negative: **{ip['negative']*100:.1f}%**")
+                        st.markdown(f"😐 Neutral:  **{ip['neutral']*100:.1f}%**")
+                        clip_img_pred = max(ip, key=ip.get)
+                        clip_img_conf = ip[clip_img_pred]
+                        cgrn_text_pred = ["positive", "negative", "neutral"][result["pred_idx"]]
+                        # Only warn if CLIP is confidently predicting a different class
+                        # (>65% confidence) to avoid noise from borderline neutral cases
+                        if clip_img_pred != cgrn_text_pred and clip_img_conf > 0.65:
+                            st.warning(
+                                f"CLIP image says **{clip_img_pred}** ({clip_img_conf*100:.0f}%) but "
+                                f"RoBERTa text says **{cgrn_text_pred}** — "
+                                "cross-modal disagreement detected."
+                            )
+
                 st.divider()
 
                 # ── GDS gauge ─────────────────────────────────────────────
@@ -448,57 +500,6 @@ Novelties:
                     render_probabilities(result["text_probs"], "Text")
                 with tabs_prob[2]:
                     render_probabilities(result["image_probs"], "Image")
-
-                # ── Sarcasm indicator (Fix C) ─────────────────────────────
-                if sarcasm_info["likely_sarcasm"]:
-                    with st.expander("⚠️ Sarcasm Signals Detected", expanded=True):
-                        st.warning(
-                            f"**Sarcasm score: {sarcasm_info['score']}** — "
-                            "rule-based detector flagged this text. "
-                            "CGRN may underestimate negative sentiment for sarcastic posts."
-                        )
-                        for sig in sarcasm_info["signals"]:
-                            st.markdown(f"  - {sig}")
-
-                # ── CLIP augmented results ────────────────────────────────
-                if clip_result:
-                    with st.expander("🖼 CLIP Supplementary Analysis", expanded=True):
-                        cc1, cc2 = st.columns(2)
-                        with cc1:
-                            st.markdown("**Semantic Alignment (CLIP)**")
-                            alignment = clip_result["alignment"]
-                            clip_gds  = clip_result["clip_gds"]
-                            align_color = "🟢" if alignment > 0.25 else ("🟠" if alignment > 0.10 else "🔴")
-                            st.markdown(
-                                f"{align_color} CLIP similarity = **{alignment:.4f}**  "
-                                f"| CLIP-GDS = **{clip_gds:.4f}**"
-                            )
-                            st.caption(
-                                "CLIP similarity: text & image in the *same* semantic space. "
-                                "< 0.10 = strong conflict, 0.10–0.25 = mild, > 0.25 = agree."
-                            )
-                            # Conflict override hint
-                            if clip_gds > 0.80 and not result["is_conflict"]:
-                                st.error(
-                                    "💡 **CLIP suggests conflict** (CLIP-GDS > 0.80) but CGRN routed "
-                                    "to Normal branch. Try lowering τ in the sidebar to < "
-                                    f"{result['gds']:.2f} to force conflict routing."
-                                )
-
-                        with cc2:
-                            st.markdown("**CLIP Zero-Shot Image Sentiment**")
-                            ip = clip_result["img_probs"]
-                            st.markdown(f"😊 Positive: **{ip['positive']*100:.1f}%**")
-                            st.markdown(f"😞 Negative: **{ip['negative']*100:.1f}%**")
-                            st.markdown(f"😐 Neutral:  **{ip['neutral']*100:.1f}%**")
-                            clip_img_pred = max(ip, key=ip.get)
-                            cgrn_text_pred = ["positive", "negative", "neutral"][result["pred_idx"]]
-                            if clip_img_pred != cgrn_text_pred:
-                                st.warning(
-                                    f"CLIP image says **{clip_img_pred}** but "
-                                    f"RoBERTa text says **{cgrn_text_pred}** — "
-                                    "cross-modal disagreement detected."
-                                )
 
                 # ── Conflict report ───────────────────────────────────────
                 with st.expander("📋 Conflict Report (Patent Feature)", expanded=True):

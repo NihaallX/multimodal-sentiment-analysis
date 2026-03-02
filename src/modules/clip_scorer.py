@@ -29,10 +29,12 @@ from PIL import Image
 
 
 # ─── Sentiment prompts for CLIP zero-shot image classification ──────────────
+# Prompts must be visually concrete — CLIP matches image pixels to text tokens;
+# abstract emotion labels score poorly vs. scene descriptions.
 _IMAGE_SENTIMENT_PROMPTS = {
-    "positive": "a photo that expresses happy, joyful, cheerful, or positive sentiment",
-    "negative": "a photo that expresses sad, angry, stressed, frustrated, or negative sentiment",
-    "neutral":  "a neutral photo without strong emotional content",
+    "positive": "a photo of people smiling, laughing, celebrating, or enjoying themselves",
+    "negative": "a photo of a person crying, looking sad, angry, stressed, or in distress",
+    "neutral":  "a photo of a person or scene with no strong emotional expression",
 }
 
 # ─── Sarcasm heuristics (Fix C) ─────────────────────────────────────────────
